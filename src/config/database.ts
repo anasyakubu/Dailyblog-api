@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 //*********** database connection ***********//
-const connection = mongoose.connect(process.env.MONGODB_URL || "", { dbName: "daily-auth-db", })
+const connection = mongoose.connect(process.env.MONGODB_URL || "", { dbName: "daily-blog-db", })
   .then(() => console.log("Database Connected ✅✅"))
   .catch((err) => console.log("Database not connected ❌❌", err));
 
