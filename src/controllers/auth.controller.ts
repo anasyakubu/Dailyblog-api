@@ -1,0 +1,287 @@
+import { IUser } from './../types/User';
+import User from "../model/user.model";
+import { Request, Response } from "express";
+import jwt from "jsonwebtoken";
+import { signToken, verifyToken } from '../utils/jwt';
+import { hashPassword, comparePassword } from "../utils/helpers/auth"
+import generateRefID from "../utils/helpers/generateRefID";
+import crypto from "crypto";
+import sendResetToken from "../services/sendResetToken";
+
+
+// ******************** LIST ALL USERS  ********************//
+const listAllUsers = async (req: Request, res: Response): Promise<void> => {
+  try {
+
+    const users = await User.find({});
+
+    if (!users || users.length === 0) {
+      res.status(400).json({ status: false, msg: "Users not found", data: users })
+    } else {
+      res.status(200).json({ status: true, msg: "Users get successful", data: users })
+    }
+
+  } catch (error: any) {
+    console.error("ERROR : ", error)
+    res.status(500).json({ status: false, msg: error.message, error: error })
+  }
+}
+
+// ******************** GET USERS BY ID  ********************//
+const getUsersByID = async (req: Request, res: Response): Promise<void> => {
+  try {
+
+    const id: string = req.params.id;
+
+    const users = await User.find({ _id: id });
+
+    if (!users || users.length === 0) {
+      res.status(400).json({ status: false, msg: "Users not found", data: users })
+    } else {
+      res.status(200).json({ status: true, msg: "Users get successful", data: users })
+    }
+
+  } catch (error: any) {
+    console.error("ERROR : ", error)
+    res.status(500).json({ status: false, msg: error.message, error: error })
+  }
+}
+
+// ******************** REGISTER USER  ********************//
+const registerUser = async (req: Request, res: Response): Promise<void> => {
+
+  const DEFAULT_USER_IMAGE =
+    "https://res.cloudinary.com/do52dpekr/image/upload/v1739627719/user-1_ml1nrp.jpg"
+
+  try {
+
+    const { name, email, username, password, referredBy } = req.body;
+
+
+    //*********** check for missing fields ***********//
+    const checkMissingFields = (fields: any) => {
+      for (const [key, value] of Object.entries(fields)) {
+        if (!value) { return key; }
+      }
+      return null; // All fields are valid
+    };
+
+    const fieldsToCheck = { name, email, username, password };
+    const missingField = checkMissingFields(fieldsToCheck);
+
+    if (missingField) { res.status(400).json({ status: false, msg: `${missingField} is required` }); }
+
+
+    //*********** check if password is good ***********//
+    if (!password || password.length < 4) {
+      res.status(400).json({
+        status: false, msg:
+          "Password is required and it should be 4 characters long",
+      });
+    }
+
+    //*********** check email exist ***********//
+    const exist = await User.findOne({ email });
+    if (exist) { res.status(400).json({ status: false, msg: "Email already taken", }); }
+
+    //*********** hased password ***********//
+    const hashedPassword = await hashPassword(password);
+
+    //*************** Generate RefID ****************//
+    const refID = await generateRefID(name);
+
+    //*********** create user in db ***********//
+    const user = await User.create({
+      uid: "", name, email, username,
+      photoURL: DEFAULT_USER_IMAGE,
+      password: hashedPassword, verified: false,
+      isPremium: false, refID: refID, referredBy,
+    });
+
+
+    if (referredBy) {
+      const referrer = await User.findOne({ refID: referredBy });
+      if (referrer) { referrer.referrals.push(user._id); await referrer.save(); }
+    }
+
+    //*********** return response ***********//
+    res.status(201).json({ status: true, msg: "User Registered Successful", data: user });
+
+
+  } catch (error: any) {
+    console.error("ERROR : ", error)
+    res.status(500).json({ status: false, msg: error.message, error: error })
+  }
+}
+
+// ******************** LOGIN  ********************//
+const login = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { email, password } = req.body;
+    //*********** Check Empty Field  ***********//
+    if (!email) { res.status(400).json({ status: false, msg: "Email is required", }); }
+
+    //*********** check if password is good ***********//
+    if (!password) { res.status(400).json({ status: false, msg: "Password is required", }); }
+
+    //*********** check if user exists  ***********//
+    const user: IUser | any = await User.findOne({ email });
+
+    if (!user) { res.status(400).json({ status: false, msg: "No User Found", }); }
+
+    //*********** throw new Error("Password does not match!"); ***********/
+    const match = await comparePassword(password, user.password);
+    if (!match) { res.status(400).json({ status: false, msg: "Invalid Password", }); }
+
+    // const token = jwt.sign(
+    //   { email: user.email, _id: user._id, userID: user.userID, role: user.role, },
+    //   process.env.JWT_SECRET as string, { expiresIn: "5hr" }
+    // );
+
+    const accessToken = signToken({ userID: user._id }, '1h');
+    const refreshToken = signToken({ userID: user._id }, '7d');
+
+    if (!user.refreshTokens) {
+      user.refreshTokens = [];
+    }
+    user.refreshTokens.push(refreshToken);
+    await user.save();
+
+    // res.status(200).json({
+    //   status: true, msg: "User logged in successfully!", token: token, userID: user._id,
+    // });
+
+    res.status(200).json({
+      status: true, msg: "User logged in successfully!", accessToken, refreshToken,
+    });
+
+  } catch (error) {
+    console.error("ERROR :", error);
+    res.status(500).json({ status: false, msg: "Internal Server Error", error: error });
+  }
+}
+
+
+// ******************** refreshAccessToken ********************//
+
+const refreshAccessToken = async (req: Request, res: Response): Promise<void> => {
+
+  const { refreshToken } = req.body;
+
+  try {
+
+    const payload: any = verifyToken(refreshToken);
+
+    const user: IUser | any = await User.findById(payload.userID);
+
+    if (!user || !user.refreshTokens.includes(refreshToken)) {
+      res.status(401).json({ status: false, msg: 'Invalid refresh token' });
+    }
+
+    const newAccessToken = signToken({ userID: user._id }, '1h');
+
+    res.status(200).json({ status: true, msg: "Refresh Access Token Successful", accessToken: newAccessToken });
+
+  } catch (error) {
+    console.error("ERROR :", error);
+    res.status(401).json({ status: false, msg: 'Token verification failed', error });
+  }
+};
+
+// ******************** UPDATE USER  ********************//
+const updateUser = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const userID = req.user?._id;
+    const { id } = req.params;
+    const { name, email, phone, username, address } = req.body;
+
+    if ([name, email, username, phone, address].some(field => !field)) {
+      res.status(400).json({ status: false, msg: "All fields are required" });
+      return; // Just return without value
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      id,
+      { name, email, username, phone, address },
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedUser) {
+      res.status(404).json({ status: false, msg: "User not found" });
+      return; // Just return without value
+    }
+
+    res.json({ status: true, msg: "User Updated Successfully", data: updatedUser });
+  } catch (error: any) {
+    res.status(500).json({ status: false, msg: "Internal Server Error" });
+  }
+};
+
+
+
+//********************** Forget password functionality **********************//
+const forgetPassword = async (req: Request, res: Response): Promise<void> => {
+  const { email } = req.body;
+  try {
+    //************ check for user exist ************//
+    const user = await User.findOne({ email: email });
+    if (!user) { res.status(404).json({ status: 404, message: 'User not found' }); }
+
+    //************  Generate reset token ************ //
+
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    await User.findOneAndUpdate(
+      { email },
+      { resetToken, resetTokenExpiry: Date.now() + 3600000 },
+      { new: true } // Returns the updated document
+    );
+
+    //************ Send email ************//
+    await sendResetToken(resetToken, email);
+
+    res.status(200).json({ statu: true, msg: 'Password reset email sent' });
+  } catch (error) {
+    console.error("Forget Pass:", error);
+    res.status(500).json({ status: false, msg: "Internal Server Error", error });
+  }
+}
+
+//********************** Reset password functionality **********************//
+const resetPassword = async (req: Request, res: Response): Promise<void> => {
+  const { token } = req.params;
+  const { password } = req.body;
+  try {
+
+    //************ check for valid token ************//
+    const user: IUser | any = await User.findOne({
+      resetToken: token,
+      resetTokenExpiry: { $gt: Date.now() } // ✅ Mongoose uses `$gt`
+    });
+
+    if (!user) { res.status(400).send({ status: false, msg: 'Invalid or expired token' }); }
+
+    //************ hashed password to db ************//
+    const hashedPassword = await hashPassword(password);
+    user.password = hashedPassword;
+    user.resetToken = undefined;
+    user.resetTokenExpiry = undefined;
+
+    // ************ Update User Password ************//
+    await user.save();
+
+    res.status(200).json({ status: true, message: 'Password reset successful' });
+
+  } catch (error: any) {
+    console.log("ERROR", error);
+    res.status(500).json({ status: false, msg: "Internal Server Error", error });
+  }
+}
+
+
+// ******************** DEACTIVITATE USER  ********************//
+const deactiviateUser = async (req: Request, res: Response): Promise<void> => { }
+
+export {
+  listAllUsers, getUsersByID, registerUser, login, refreshAccessToken, updateUser, forgetPassword, resetPassword,
+  deactiviateUser
+}
