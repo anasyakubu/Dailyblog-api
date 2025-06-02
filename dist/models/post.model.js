@@ -34,8 +34,29 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const mongoose_1 = __importStar(require("mongoose"));
-const PostSchema = new mongoose_1.Schema({
-    title: { type: String, required: true },
-    content: { type: String, required: true }
+// Image Schema
+const ImageSchema = new mongoose_1.Schema({
+    url: { type: String, required: true },
+    alt: { type: String },
 });
+// Post Schema
+const PostSchema = new mongoose_1.Schema({
+    title: { type: String, required: true, trim: true, maxlength: 200 },
+    slug: { type: String, unique: true, required: true },
+    content: { type: String, required: true },
+    excerpt: { type: String, maxlength: 500 },
+    images: [ImageSchema],
+    tags: [{ type: String, trim: true }],
+    category: { type: String, required: true },
+    author: { type: mongoose_1.Schema.Types.ObjectId, ref: "User", required: true },
+    status: {
+        type: String,
+        enum: ["draft", "published", "archived"],
+        default: "draft",
+    },
+    seoTitle: { type: String, maxlength: 160 },
+    seoDescription: { type: String, maxlength: 300 },
+    seoKeywords: [String],
+    publishedAt: { type: Date },
+}, { timestamps: true });
 exports.default = mongoose_1.default.model("Post", PostSchema);

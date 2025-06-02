@@ -45,5 +45,5 @@ app.use(errorHandler_1.default); // for handling error
 // GraphQL endpoint
 app.use("/post", (0, express_graphql_1.graphqlHTTP)({ schema: post_schema_js_1.default, graphiql: true }));
 app.listen(PORT, () => {
-    console.log(`Server running at http://localhost:${PORT}/graphql`);
+    console.log(`Server running at http://localhost:${PORT}`);
 });
